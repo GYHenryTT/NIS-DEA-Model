@@ -1,0 +1,148 @@
+---
+title: "Data_processing"
+output: html_document
+---
+
+##Set up working environment
+
+```{r}
+pacman::p_load(dplyr,rpart,rpart.plot,rattle,caTools,caret,randomForest,openxlsx,e1071,data.table,ggplot2,stats,VIM)
+```
+****
+##Data preparation
+###Sampling
+Sampleing without replacement respectively from "OB" and "PR" labeled data
+```{r}
+setwd("C:/Users/gaohe/Desktop/DataMonster-Project")
+PR_media <- read.csv("PR.csv", header = TRUE, stringsAsFactors = FALSE, 
+                     row.names=NULL)
+OB_media <- read.csv("OB.csv", header = TRUE, stringsAsFactors = FALSE, 
+                     row.names=NULL)
+
+set.seed(143)
+OB_media_dt <- data.table(OB_media)
+OB_media_sample <- OB_media_dt[sample(.N, 30000)]
+PR_media_dt <- data.table(PR_media)
+PR_media_sample <- PR_media_dt[sample(.N, 30000)]
+
+# Combine 2 sample-set together
+nd<-rbind(OB_media_sample, PR_media_sample)
+```
+
+###Checking out missing value
+```{r}
+aggr(nd,prop=TRUE,numbers=TRUE,labels=TRUE,sortVars=TRUE)
+```
+
+###Feature engineering
+MISSING_VALUE_&Data_manipulated
+```{r}
+nd <- nd[which(is.na(nd$inv_avg)==FALSE)]
+nd <- nd[which(nd$inv_avg>=0)]
+nd$label <- as.factor(nd$label)
+nd$is_auto <- as.factor(nd$is_auto)
+nd$lifecycle <- as.factor(nd$lifecycle)
+nd$total_gv[which(is.na(nd$total_gv))] <- 0
+#nd$inv_avg[which(is.na(nd$inv_avg))] <- median(nd$inv_avg, na.rm=TRUE)
+
+td <- as.Date("2017-11-26")
+nd$last_inbound[which(nd$last_inbound=="")]<-"2010/1/1"
+nd$last_inbound <- as.Date(nd$last_inbound)
+inbound_history = as.numeric(td - nd$last_inbound)
+nd$asin_creation_date <- as.Date(nd$asin_creation_date)
+asin_history = as.numeric(td - nd$asin_creation_date)
+
+nd <- cbind(nd, asin_history, inbound_history)
+```
+
+Descriptive statistic
+```{r}
+ggplot(nd, aes(x = asin_history)) +
+  geom_histogram(fill = 'red', colour = 'black',bins=30) +
+  facet_grid(label~., scales = 'free')
+
+ggplot(nd, aes(x = inbound_history)) +
+  geom_histogram(fill = 'red', colour = 'black') +
+  facet_grid(label~., scales = 'free')
+
+#Corralation
+with(na.omit(nd),cor(inv_avg, inv_min))
+with(na.omit(nd),cor(inv_avg, inv_max))
+with(na.omit(nd),cor(completepo, confirmpo))
+
+#hypothesis
+with(nd,t.test(inbound_history[label=="PR"],inbound_history[label=="OB"]))
+with(nd,t.test(asin_history[label=="PR"],asin_history[label=="OB"]))
+with(nd,t.test(inv_avg[label=="PR"],inv_avg[label=="OB"]))
+with(nd,t.test(total_gv[label=="PR"],total_gv[label=="OB"]))
+with(nd,t.test(vendor_num[label=="PR"],vendor_num[label=="OB"]))
+with(nd,t.test(confirmpo[label=="PR"],confirmpo[label=="OB"]))
+with(nd,t.test(sumittedpo[label=="PR"],sumittedpo[label=="OB"]))
+with(nd,t.test(completepo[label=="PR"],completepo[label=="OB"]))
+```
+
+```{r}
+nnd <- nd %>% 
+  select (
+    ASIN,
+    label,
+    inv_avg,
+    completepo,
+    sumittedpo,
+    confirmpo,
+    vendor_num,
+    asin_history,
+    inbound_history,
+    total_gv
+  )
+
+sample = sample.split(nnd$ASIN, SplitRatio = .75)
+train = subset(nnd, sample == TRUE)
+test = subset(nnd, sample == FALSE)
+
+fit <- rpart(label ~ 
+               inv_avg+
+               #completepo+
+               #sumittedpo+
+               confirmpo+
+               vendor_num+
+               asin_history+
+               inbound_history+
+               total_gv,
+               data=train,
+               method="class",
+               control = rpart.control(maxdepth = 30)
+             )
+
+fancyRpartPlot(fit)
+Prediction <- predict(fit, test, type = "class")
+table(Prediction, test$label)
+confusionMatrix(Prediction, test$label)
+```
+```{r}
+#Random_Forest
+RandomForest <- randomForest(
+  label ~ 
+    inv_avg+
+    completepo+
+    #sumittedpo+
+    #confirmpo+
+    vendor_num+
+    asin_history+
+    inbound_history+
+    total_gv,
+  data=train,
+  importance=TRUE, 
+  ntree=100)
+
+varImpPlot(RandomForest)
+
+Prediction2 <- predict(RandomForest, test)
+table(Prediction2, test$label)
+confusionMatrix(Prediction2, test$label)
+
+Prediction22<- predict(RandomForest,train)
+table(Prediction22, train$label)
+confusionMatrix(Prediction22, train$label)
+```
+
